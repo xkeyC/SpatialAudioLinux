@@ -38,6 +38,7 @@
 - 内部以 48 kHz 处理，其他采样率由 PipeWire 自动转换。
 - 耳机打开传感器后，姿态要十几秒才收敛到重力方向（WF-1000XM5 约 15 秒）。这段时间声音保持在正前方；读数稳定后，程序自动把当前方向设为正前方。
 - 校准时假设你正视前方、头是水平的：只取水平朝向，耳机在耳朵里的倾斜角作为固定偏差扣掉。之后觉得方向偏了，就正视前方执行一次 `recenter`。
+- 自动回中（参照 Android 空间音频的 `HeadTrackingProcessor`，参数与 Android 相同）：头在 6 秒内的转动都不超过 10.5° 时，把当前朝向设为正前方。和 Android 不同，这里只调整水平朝向，不重新校准佩戴倾角，这样低头看东西时不会把低头当成平视。正前方的变化以最多 0.8 rad/s 的速度平滑过渡，不会突然跳动。
 
 ## 安装
 
@@ -50,7 +51,7 @@
   # 在 NixOS 配置里
   imports = [ inputs.spatial-audio-linux.nixosModules.default ];
   programs.spatial-audio-linux.enable = true;
-  # programs.spatial-audio-linux.extraArgs = [ "--follow-secs" "30" ];
+  # programs.spatial-audio-linux.extraArgs = [ "--no-auto-recenter" ];
 }
 ```
 
@@ -91,7 +92,7 @@ spatial-audio-linux status
 | 参数 | 说明 |
 | --- | --- |
 | `--sofa <文件>` | HRTF 数据（SOFA）。也可以用环境变量 `SPATIAL_AUDIO_SOFA` 指定 |
-| `--follow-secs <秒>` | 头静止时，正前方在这段时间内慢慢跟上头的朝向，用来抵消陀螺仪的偏航漂移；0 为关闭 |
+| `--no-auto-recenter` | 关闭自动回中（见下文） |
 | `--front-angle <度>` | 前置左右音箱的角度，默认 30 |
 | `--gain-db`、`--lfe-gain-db` | 输出增益和 LFE 增益 |
 | `--target <节点>` | 输出到指定节点（node.name 或 object.serial），默认跟随头追耳机 |
@@ -101,7 +102,7 @@ spatial-audio-linux status
 ## 已知限制
 
 - 只有消声室 HRTF，没有房间混响，声音的「外化」感取决于 HRTF 与个人耳廓的匹配程度。
-- 耳机没有磁力计，偏航角会慢慢漂移，需要时用 `recenter`，或者打开 `--follow-secs`。
+- 耳机没有磁力计，偏航角会慢慢漂移；自动回中会把它修正回来，也可以手动 `recenter`。
 - 同一时间只使用一个头追设备。
 
 ## 许可证

@@ -58,10 +58,10 @@ struct TrackerArgs {
     /// (use if sounds move with your head instead of staying put).
     #[arg(long)]
     invert: bool,
-    /// Let the front follow the head over this many seconds while it is
-    /// still (compensates gyro drift); 0 = never.
-    #[arg(long, default_value_t = 0.0)]
-    follow_secs: f32,
+    /// Do not make the current direction the front after the head has been
+    /// still for 6 seconds (Android's auto-recentring).
+    #[arg(long)]
+    no_auto_recenter: bool,
     /// Do not ask BlueZ to connect the HID channel of headphones.
     #[arg(long)]
     no_connect_hid: bool,
@@ -121,7 +121,7 @@ fn tracking_options(args: &TrackerArgs, verbose: bool) -> tracking::TrackingOpti
         device: args.device.clone(),
         interval_ms: args.interval_ms,
         invert: args.invert,
-        follow_secs: args.follow_secs,
+        auto_recenter: !args.no_auto_recenter,
         connect_hid: !args.no_connect_hid,
         verbose,
     }

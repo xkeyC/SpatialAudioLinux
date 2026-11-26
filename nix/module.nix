@@ -25,10 +25,7 @@ in
     extraArgs = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ ];
-      example = [
-        "--follow-secs"
-        "30"
-      ];
+      example = [ "--no-auto-recenter" ];
       description = "传给 `spatial-audio-linux run` 的额外参数。";
     };
   };

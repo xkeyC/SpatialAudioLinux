@@ -119,10 +119,16 @@ fn wrap_angle(a: f32) -> f32 {
 /// assumes the user looks straight ahead with a level head: it keeps only the
 /// heading as the room's front and stores the remaining tilt as a
 /// mount calibration.
+///
+/// Like Android's `HeadTrackingProcessor`, changes of the front are applied
+/// gradually (see [`HeadPose::advance`]) so recentring never jumps.
 #[derive(Clone, Debug)]
 pub struct HeadPose {
-    /// Heading of the room's front in the reference frame (radians).
+    /// Heading of the room's front in the reference frame (radians), as
+    /// currently rendered.
     front_heading: Option<f32>,
+    /// Heading the front is moving towards.
+    target_heading: f32,
     /// Mount calibration: tracker frame -> real head frame.
     calibration: Quat,
     current: Quat,
@@ -135,6 +141,7 @@ impl HeadPose {
     pub fn new(invert: bool) -> Self {
         HeadPose {
             front_heading: None,
+            target_heading: 0.0,
             calibration: Quat::IDENTITY,
             current: Quat::IDENTITY,
             invert,
@@ -151,7 +158,7 @@ impl HeadPose {
     }
 
     /// Real head frame -> reference frame.
-    fn head(&self) -> Quat {
+    pub fn head(&self) -> Quat {
         self.tracker().mul(self.calibration)
     }
 
@@ -164,17 +171,43 @@ impl HeadPose {
     }
 
     /// Make the current direction the front, treating the current head
-    /// orientation as level.
+    /// orientation as level (this also recalibrates the mount tilt).
     pub fn recenter(&mut self) {
         let e = self.tracker();
         let heading = heading_of(e.rotate([0.0, 1.0, 0.0]), e.rotate([0.0, 0.0, 1.0]));
         let level = Quat::from_rotation_vector([0.0, 0.0, heading]);
         self.calibration = e.conj().mul(level).normalize();
-        self.front_heading = Some(heading);
+        self.target_heading = heading;
+        if self.front_heading.is_none() {
+            self.front_heading = Some(heading);
+        }
+    }
+
+    /// Make the current heading the front, keeping the mount calibration
+    /// (used for automatic recentring, where the head may not be level).
+    pub fn recenter_heading(&mut self) {
+        if self.front_heading.is_some() {
+            self.target_heading = self.current_heading();
+        }
+    }
+
+    /// Move the rendered front towards its target by at most
+    /// `max_rate * dt` radians.
+    pub fn advance(&mut self, dt: f32, max_rate: f32) {
+        if let Some(front) = self.front_heading {
+            let delta = wrap_angle(self.target_heading - front);
+            let step = max_rate * dt;
+            self.front_heading = Some(if delta.abs() <= step {
+                self.target_heading
+            } else {
+                wrap_angle(front + step.copysign(delta))
+            });
+        }
     }
 
     pub fn reset(&mut self) {
         self.front_heading = None;
+        self.target_heading = 0.0;
         self.calibration = Quat::IDENTITY;
         self.current = Quat::IDENTITY;
     }
@@ -183,14 +216,6 @@ impl HeadPose {
     fn current_heading(&self) -> f32 {
         let h = self.head();
         heading_of(h.rotate([0.0, 1.0, 0.0]), h.rotate([0.0, 0.0, 1.0]))
-    }
-
-    /// Slowly turn the room's front towards the current heading.
-    pub fn drift_towards_current(&mut self, t: f32) {
-        if let Some(front) = self.front_heading {
-            let delta = wrap_angle(self.current_heading() - front);
-            self.front_heading = Some(wrap_angle(front + delta * t));
-        }
     }
 
     /// Rotation that maps a direction fixed in the room (expressed in the
@@ -283,16 +308,27 @@ mod tests {
     }
 
     #[test]
-    fn follow_turns_front_towards_head() {
+    fn auto_recenter_is_rate_limited_and_keeps_tilt() {
+        let tilt = Quat::from_rotation_vector([0.7, 0.0, 0.0]);
         let mut pose = HeadPose::new(false);
-        pose.update(Quat::IDENTITY);
+        pose.update(tilt);
         pose.recenter();
-        pose.update(Quat::from_rotation_vector([0.0, 0.0, 1.0]));
-        for _ in 0..200 {
-            pose.drift_towards_current(0.05);
-        }
+        // Head turned 1 rad left and looking 0.3 rad down, held still.
+        let turned = Quat::from_rotation_vector([0.0, 0.0, 1.0])
+            .mul(Quat::from_rotation_vector([-0.3, 0.0, 0.0]))
+            .mul(tilt);
+        pose.update(turned);
+        pose.recenter_heading();
+        pose.advance(0.5, 0.8);
+        // After 0.5 s at 0.8 rad/s the front has moved 0.4 of the 1 rad turn
+        // (the apparent azimuth is a bit larger because the head is pitched).
         let (az, _) = pose.front_source_angles();
+        assert!((-38.0..-34.0).contains(&az), "az={az}");
+        pose.advance(10.0, 0.8);
+        let (az, el) = pose.front_source_angles();
         assert!(az.abs() < 0.1, "az={az}");
+        // The downward look is still a downward look: front appears above.
+        assert!((el - 0.3f32.to_degrees()).abs() < 0.1, "el={el}");
     }
 
     #[test]

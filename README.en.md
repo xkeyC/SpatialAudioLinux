@@ -36,6 +36,7 @@ apps ──► "Spatial Audio (Head Tracking)" virtual 7.1 sink
 - Processing runs at 48 kHz; PipeWire converts other rates.
 - After the sensor is enabled, its attitude takes a while to converge to gravity (about 15 s on the WF-1000XM5). Sound stays in front meanwhile; once the readings settle, the current direction becomes the front automatically.
 - Recentring assumes you look straight ahead with a level head: only the heading is kept, and the tilt of the earbud in your ear is stored as a fixed offset. Run `recenter` while looking ahead whenever the front feels off.
+- Auto-recentring follows Android's `HeadTrackingProcessor` with the same parameters: when the head stays within 10.5° for 6 seconds, that heading becomes the front. Unlike Android only the heading changes, the mount calibration is kept, so looking down at something is not mistaken for level. The front moves at most 0.8 rad/s, so it never jumps.
 
 ## Install
 
@@ -48,7 +49,7 @@ apps ──► "Spatial Audio (Head Tracking)" virtual 7.1 sink
   # in your NixOS configuration
   imports = [ inputs.spatial-audio-linux.nixosModules.default ];
   programs.spatial-audio-linux.enable = true;
-  # programs.spatial-audio-linux.extraArgs = [ "--follow-secs" "30" ];
+  # programs.spatial-audio-linux.extraArgs = [ "--no-auto-recenter" ];
 }
 ```
 
@@ -87,7 +88,7 @@ Common options (see `spatial-audio-linux run --help`):
 | Option | Meaning |
 | --- | --- |
 | `--sofa <file>` | HRTF data (SOFA); also `SPATIAL_AUDIO_SOFA` |
-| `--follow-secs <s>` | While the head is still, the front follows it over this time, compensating gyro yaw drift; 0 = off |
+| `--no-auto-recenter` | Disable auto-recentring (see above) |
 | `--front-angle <deg>` | Angle of the front left/right speakers, default 30 |
 | `--gain-db`, `--lfe-gain-db` | Output and LFE gain |
 | `--target <node>` | Output node (node.name or object.serial); default follows the tracking headset |
@@ -97,7 +98,7 @@ Common options (see `spatial-audio-linux run --help`):
 ## Limitations
 
 - Anechoic HRTFs only, no room reverb; externalisation depends on how well the HRTF matches your ears.
-- No magnetometer, so yaw drifts slowly; use `recenter` or `--follow-secs`.
+- No magnetometer, so yaw drifts slowly; auto-recentring corrects it, or run `recenter`.
 - One head tracker at a time.
 
 ## License

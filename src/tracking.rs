@@ -19,6 +19,49 @@ const SETTLED_SPEED: f32 = 0.02;
 const SETTLE_TIME: Duration = Duration::from_millis(1500);
 /// Recentre anyway after this long, even if the head keeps moving.
 const SETTLE_TIMEOUT: Duration = Duration::from_secs(30);
+/// Auto-recentring parameters, the values Android's spatializer uses
+/// (SpatializerPoseController.cpp).
+const AUTO_RECENTER_WINDOW: Duration = Duration::from_secs(6);
+const AUTO_RECENTER_THRESHOLD: f32 = 10.5 * std::f32::consts::PI / 180.0;
+/// Maximum speed at which the front moves to a new heading (rad/s).
+const MAX_RECENTER_RATE: f32 = 0.8;
+
+/// Detects that all head orientations within the last window are close to
+/// the latest one (Android's StillnessDetector).
+#[derive(Default)]
+struct Stillness {
+    poses: VecDeque<(Instant, Quat)>,
+    window_full: bool,
+}
+
+impl Stillness {
+    fn push(&mut self, now: Instant, q: Quat) {
+        self.poses.push_back((now, q));
+        while let Some(&(t, _)) = self.poses.front() {
+            if now.duration_since(t) < AUTO_RECENTER_WINDOW {
+                break;
+            }
+            self.poses.pop_front();
+            self.window_full = true;
+        }
+    }
+
+    fn is_still(&self) -> bool {
+        let Some(&(_, latest)) = self.poses.back() else {
+            return false;
+        };
+        self.window_full
+            && self
+                .poses
+                .iter()
+                .all(|&(_, q)| angular_speed(q, latest, 1.0) < AUTO_RECENTER_THRESHOLD)
+    }
+
+    fn clear(&mut self) {
+        self.poses.clear();
+        self.window_full = false;
+    }
+}
 use crate::render::Scene;
 
 #[derive(Clone, Debug, Default)]
@@ -57,9 +100,8 @@ pub struct TrackingOptions {
     pub device: Option<String>,
     pub interval_ms: u32,
     pub invert: bool,
-    /// Seconds over which the front slowly follows the head while it is
-    /// still; 0 disables.
-    pub follow_secs: f32,
+    /// Recentre (heading only) after the head has been still for a while.
+    pub auto_recenter: bool,
     pub connect_hid: bool,
     /// Print the pose for every sample.
     pub verbose: bool,
@@ -211,7 +253,7 @@ fn track(
         };
     }
 
-    let enabled_at = Instant::now();
+    let mut enabled_at = Instant::now();
     let mut last_sample = Instant::now();
     let mut last_time = Instant::now();
     // Recent orientations, to measure rotation speed over a window: the
@@ -220,6 +262,7 @@ fn track(
     let mut history: VecDeque<(Instant, Quat)> = VecDeque::new();
     let mut speed = 0.0f32;
     let mut still_since: Option<Instant> = None;
+    let mut stillness = Stillness::default();
     let mut last_discontinuity = None;
     let mut was_tracking = true;
     let mut samples = 0u64;
@@ -279,18 +322,31 @@ fn track(
         }
         if sample.discontinuity.is_some() && sample.discontinuity != last_discontinuity {
             if last_discontinuity.is_some() && pose.is_centered() {
-                eprintln!("tracker reference frame reset, recentring");
-                pose.recenter();
+                // New reference frame: wait for it to settle, then recentre.
+                eprintln!("tracker reference frame reset");
+                pose.reset();
+                pose.update(q);
+                enabled_at = now;
+                stillness.clear();
             }
             last_discontinuity = sample.discontinuity;
         }
         if shared.recenter.swap(false, Ordering::Relaxed) {
             pose.recenter();
+            stillness.clear();
             eprintln!("recentred");
         }
-        if opts.follow_secs > 0.0 && speed < 0.2 {
-            pose.drift_towards_current((dt / opts.follow_secs).min(1.0));
+        // Android-style auto-recentring: once the head has stayed within
+        // AUTO_RECENTER_THRESHOLD for AUTO_RECENTER_WINDOW, that direction
+        // becomes the front (heading only; the mount calibration is kept).
+        if pose.is_centered() {
+            stillness.push(now, pose.head());
+            if opts.auto_recenter && stillness.is_still() {
+                pose.recenter_heading();
+                stillness.clear();
+            }
         }
+        pose.advance(dt, MAX_RECENTER_RATE);
 
         let tracking = shared.tracking.load(Ordering::Relaxed);
         if let Some(scene) = scene.as_deref_mut() {
