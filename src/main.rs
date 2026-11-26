@@ -5,6 +5,7 @@ mod eq;
 mod hid;
 mod pose;
 mod render;
+mod settings;
 mod tracking;
 mod tray;
 
@@ -61,7 +62,7 @@ struct TrackerArgs {
     #[arg(long)]
     invert: bool,
     /// Do not make the current direction the front after the head has been
-    /// still for 6 seconds (Android's auto-recentring).
+    /// still for 6 seconds (Android's auto-recentring). Default: saved setting.
     #[arg(long)]
     no_auto_recenter: bool,
     /// Do not ask BlueZ to connect the HID channel of headphones.
@@ -91,9 +92,9 @@ struct RunArgs {
     /// LFE gain in dB (relative to the other channels).
     #[arg(long, default_value_t = -6.0, allow_hyphen_values = true)]
     lfe_gain_db: f32,
-    /// Headphone equalisation of the HRTFs.
-    #[arg(long, value_enum, default_value_t = eq::EqMode::Front)]
-    eq: eq::EqMode,
+    /// Headphone equalisation of the HRTFs [default: saved setting, else front].
+    #[arg(long, value_enum)]
+    eq: Option<eq::EqMode>,
     /// Virtual speaker distance in metres (HRTF lookup).
     #[arg(long, default_value_t = 1.0)]
     distance: f32,
@@ -140,11 +141,17 @@ fn run(args: RunArgs) -> Result<()> {
         None => bail!("no SOFA file found; pass --sofa (e.g. libmysofa's default.sofa)"),
     };
     let shared = tracking::Shared::new();
-    shared
-        .auto_recenter
-        .store(!args.tracker.no_auto_recenter, Ordering::Relaxed);
-    shared.eq.store(args.eq.index(), Ordering::Relaxed);
+    // Saved settings, overridden by options given on the command line.
+    let mut saved = settings::Settings::load();
+    if args.tracker.no_auto_recenter {
+        saved.auto_recenter = false;
+    }
+    if let Some(eq) = args.eq {
+        saved.equaliser = eq;
+    }
+    saved.apply(&shared);
     control::serve(shared.clone())?;
+    settings::spawn_saver(shared.clone());
 
     let speakers = render::layout_7_1(args.front_angle);
     let (scene, engine) = render::build(render::RenderConfig {

@@ -88,6 +88,8 @@ spatial-audio-linux status
 
 系统托盘里有一个耳机图标，左键或右键单击打开菜单：查看状态（设备、正前方声音的方位），重新校准正前方，开关头追和自动回中，切换均衡方式，或退出；中键单击开关头部追踪。托盘文字跟随 KDE 的显示语言（没有设置时看 `LANGUAGE` / `LC_ALL` / `LC_MESSAGES` / `LANG`），中文或英文，改了语言不用重启。不需要托盘时加 `--no-tray`。
 
+头部追踪、自动回中和均衡方式的设置会自动保存到 `~/.config/spatial-audio-linux/settings.conf`（遵循 `XDG_CONFIG_HOME`），下次启动沿用；命令行上显式给出的 `--eq`、`--no-auto-recenter` 优先。
+
 建议给 `spatial-audio-linux recenter` 绑一个全局快捷键（KDE：系统设置 → 键盘 → 快捷键 → 添加命令）。
 
 常用参数（`spatial-audio-linux run --help` 查看全部）：

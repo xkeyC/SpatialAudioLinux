@@ -82,7 +82,9 @@ spatial-audio-linux toggle     # head tracking on/off (off: speakers follow the 
 spatial-audio-linux status
 ```
 
-After starting, select "Spatial Audio (Head Tracking)" as the default output in your sound settings. A headphones icon appears in the system tray; left or right click opens its menu (status, recenter, head tracking and auto-recentring switches, equaliser, quit) and middle click toggles head tracking. The tray follows the KDE display language (falling back to `LANGUAGE` / `LC_ALL` / `LC_MESSAGES` / `LANG`), Chinese or English, and picks up language changes without a restart. Use `--no-tray` to hide it. Binding `spatial-audio-linux recenter` to a global shortcut is recommended.
+After starting, select "Spatial Audio (Head Tracking)" as the default output in your sound settings. A headphones icon appears in the system tray; left or right click opens its menu (status, recenter, head tracking and auto-recentring switches, equaliser, quit) and middle click toggles head tracking. The tray follows the KDE display language (falling back to `LANGUAGE` / `LC_ALL` / `LC_MESSAGES` / `LANG`), Chinese or English, and picks up language changes without a restart. Use `--no-tray` to hide it.
+
+Head tracking, auto-recentring and equaliser choices are saved to `~/.config/spatial-audio-linux/settings.conf` (honours `XDG_CONFIG_HOME`) and restored on the next start; `--eq` and `--no-auto-recenter` given on the command line take precedence. Binding `spatial-audio-linux recenter` to a global shortcut is recommended.
 
 Common options (see `spatial-audio-linux run --help`):
 
