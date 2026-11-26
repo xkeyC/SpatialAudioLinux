@@ -1,13 +1,24 @@
 //! Head tracking thread: finds a tracker, reads it and drives the scene.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::bluez::Bluez;
 use crate::hid::{self, Tracker};
-use crate::pose::{HeadPose, Quat};
+use crate::pose::{HeadPose, Quat, angular_speed};
+
+/// Window over which the rotation speed is measured.
+const SPEED_WINDOW: Duration = Duration::from_secs(1);
+/// Below this rotation speed (rad/s) the head counts as still. The Sony
+/// WF-1000XM5 drifts at ~0.05 rad/s while converging; its jitter over a 1 s
+/// window is well below 0.01 rad/s.
+const SETTLED_SPEED: f32 = 0.02;
+/// How long the orientation must stay still before the first recentring.
+const SETTLE_TIME: Duration = Duration::from_millis(1500);
+/// Recentre anyway after this long, even if the head keeps moving.
+const SETTLE_TIMEOUT: Duration = Duration::from_secs(30);
 use crate::render::Scene;
 
 #[derive(Clone, Debug, Default)]
@@ -200,8 +211,15 @@ fn track(
         };
     }
 
+    let enabled_at = Instant::now();
     let mut last_sample = Instant::now();
     let mut last_time = Instant::now();
+    // Recent orientations, to measure rotation speed over a window: the
+    // sample-to-sample jitter is as large as the slow drift while the
+    // tracker's attitude converges.
+    let mut history: VecDeque<(Instant, Quat)> = VecDeque::new();
+    let mut speed = 0.0f32;
+    let mut still_since: Option<Instant> = None;
     let mut last_discontinuity = None;
     let mut was_tracking = true;
     let mut samples = 0u64;
@@ -231,9 +249,36 @@ fn track(
         last_sample = now;
         samples += 1;
 
-        pose.update(Quat::from_rotation_vector(sample.rotation));
+        let q = Quat::from_rotation_vector(sample.rotation);
+        history.push_back((now, q));
+        while history.len() > 2 && now.duration_since(history[1].0) >= SPEED_WINDOW {
+            history.pop_front();
+        }
+        let (t0, q0) = history[0];
+        let span = now.duration_since(t0).as_secs_f32();
+        if span >= 0.25 {
+            speed = angular_speed(q0, q, span);
+        }
+        if speed < SETTLED_SPEED {
+            still_since.get_or_insert(now);
+        } else {
+            still_since = None;
+        }
+        pose.update(q);
+
+        // The tracker's attitude estimate converges towards gravity for a
+        // few seconds after it is enabled; wait for that before choosing the
+        // front, and keep the speakers in front of the head meanwhile.
+        if !pose.is_centered() {
+            let settled = still_since.is_some_and(|t| now.duration_since(t) > SETTLE_TIME)
+                && now.duration_since(enabled_at) > Duration::from_secs(1);
+            if settled || now.duration_since(enabled_at) > SETTLE_TIMEOUT {
+                pose.recenter();
+                eprintln!("orientation settled, front set to the current direction");
+            }
+        }
         if sample.discontinuity.is_some() && sample.discontinuity != last_discontinuity {
-            if last_discontinuity.is_some() {
+            if last_discontinuity.is_some() && pose.is_centered() {
                 eprintln!("tracker reference frame reset, recentring");
                 pose.recenter();
             }
@@ -243,13 +288,8 @@ fn track(
             pose.recenter();
             eprintln!("recentred");
         }
-        if opts.follow_secs > 0.0 {
-            let still = sample
-                .angular_velocity
-                .is_none_or(|w| (w[0] * w[0] + w[1] * w[1] + w[2] * w[2]).sqrt() < 0.2);
-            if still {
-                pose.drift_towards_current((dt / opts.follow_secs).min(1.0));
-            }
+        if opts.follow_secs > 0.0 && speed < 0.2 {
+            pose.drift_towards_current((dt / opts.follow_secs).min(1.0));
         }
 
         let tracking = shared.tracking.load(Ordering::Relaxed);
@@ -270,10 +310,17 @@ fn track(
             st.samples = samples;
         }
         if opts.verbose {
-            let w = sample.angular_velocity.unwrap_or([0.0; 3]);
             println!(
-                "front source at azimuth {az:7.1}° elevation {el:6.1}°  (head yaw {:6.1}°)  rot [{:6.3} {:6.3} {:6.3}]  gyro [{:6.2} {:6.2} {:6.2}]",
-                -az, sample.rotation[0], sample.rotation[1], sample.rotation[2], w[0], w[1], w[2]
+                "front source at azimuth {az:7.1}° elevation {el:6.1}°  (head yaw {:6.1}°)  speed {speed:5.2} rad/s  rot [{:6.3} {:6.3} {:6.3}]{}",
+                -az,
+                sample.rotation[0],
+                sample.rotation[1],
+                sample.rotation[2],
+                if pose.is_centered() {
+                    ""
+                } else {
+                    "  (settling)"
+                },
             );
         }
     }

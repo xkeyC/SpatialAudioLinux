@@ -331,7 +331,8 @@ pub struct Sample {
     /// Rotation vector in radians (axis * angle), in the Android head frame:
     /// +X out of the right ear, +Y out of the nose, +Z out of the top of the head.
     pub rotation: [f32; 3],
-    /// Angular velocity in rad/s, if the tracker reports it.
+    /// Angular velocity in rad/s, if the tracker reports it (Sony sends zeros).
+    #[allow(dead_code)]
     pub angular_velocity: Option<[f32; 3]>,
     /// Reference frame discontinuity counter.
     pub discontinuity: Option<u32>,

@@ -72,40 +72,6 @@ impl Quat {
         let r = self.mul(p).mul(self.conj());
         [r.x, r.y, r.z]
     }
-
-    /// Spherical interpolation, `t` in 0..=1.
-    pub fn slerp(self, mut o: Quat, t: f32) -> Quat {
-        let mut dot = self.w * o.w + self.x * o.x + self.y * o.y + self.z * o.z;
-        if dot < 0.0 {
-            o = Quat {
-                w: -o.w,
-                x: -o.x,
-                y: -o.y,
-                z: -o.z,
-            };
-            dot = -dot;
-        }
-        if dot > 0.9995 {
-            return Quat {
-                w: self.w + (o.w - self.w) * t,
-                x: self.x + (o.x - self.x) * t,
-                y: self.y + (o.y - self.y) * t,
-                z: self.z + (o.z - self.z) * t,
-            }
-            .normalize();
-        }
-        let theta = dot.clamp(-1.0, 1.0).acos();
-        let s = theta.sin();
-        let a = ((1.0 - t) * theta).sin() / s;
-        let b = (t * theta).sin() / s;
-        Quat {
-            w: self.w * a + o.w * b,
-            x: self.x * a + o.x * b,
-            y: self.y * a + o.y * b,
-            z: self.z * a + o.z * b,
-        }
-        .normalize()
-    }
 }
 
 /// Convert a vector from the Android head frame (+X right ear, +Y nose,
@@ -126,10 +92,39 @@ pub fn sofa_direction(azimuth_deg: f32, elevation_deg: f32) -> [f32; 3] {
     [el.cos() * az.cos(), el.cos() * az.sin(), el.sin()]
 }
 
+/// Heading (rotation about the reference +Z axis) of a forward direction
+/// given in the tracker reference frame.
+fn heading_of(forward: [f32; 3], up: [f32; 3]) -> f32 {
+    let (fx, fy) = if forward[0].hypot(forward[1]) > 0.2 {
+        (forward[0], forward[1])
+    } else {
+        // Looking almost straight up/down: the top of the head points
+        // backwards/forwards instead.
+        let s = if forward[2] > 0.0 { -1.0 } else { 1.0 };
+        (up[0] * s, up[1] * s)
+    };
+    (-fx).atan2(fy)
+}
+
+fn wrap_angle(a: f32) -> f32 {
+    use std::f32::consts::{PI, TAU};
+    (a + PI).rem_euclid(TAU) - PI
+}
+
 /// Tracks the head orientation relative to the "front" chosen at recentring.
+///
+/// The tracker reports the orientation of *its* frame relative to a
+/// gravity-aligned reference (+Z up). Earbuds sit tilted in the ear, so their
+/// frame is off from the real head frame by a fixed rotation. Recentring
+/// assumes the user looks straight ahead with a level head: it keeps only the
+/// heading as the room's front and stores the remaining tilt as a
+/// mount calibration.
 #[derive(Clone, Debug)]
 pub struct HeadPose {
-    reference: Option<Quat>,
+    /// Heading of the room's front in the reference frame (radians).
+    front_heading: Option<f32>,
+    /// Mount calibration: tracker frame -> real head frame.
+    calibration: Quat,
     current: Quat,
     /// Flip the interpretation of the tracker quaternion (world->head instead
     /// of head->world), for trackers that report the inverse rotation.
@@ -139,45 +134,74 @@ pub struct HeadPose {
 impl HeadPose {
     pub fn new(invert: bool) -> Self {
         HeadPose {
-            reference: None,
+            front_heading: None,
+            calibration: Quat::IDENTITY,
             current: Quat::IDENTITY,
             invert,
         }
     }
 
-    pub fn update(&mut self, q: Quat) {
-        self.current = q;
-        if self.reference.is_none() {
-            self.reference = Some(q);
+    /// Tracker frame -> reference frame.
+    fn tracker(&self) -> Quat {
+        if self.invert {
+            self.current.conj()
+        } else {
+            self.current
         }
     }
 
+    /// Real head frame -> reference frame.
+    fn head(&self) -> Quat {
+        self.tracker().mul(self.calibration)
+    }
+
+    pub fn update(&mut self, q: Quat) {
+        self.current = q;
+    }
+
+    pub fn is_centered(&self) -> bool {
+        self.front_heading.is_some()
+    }
+
+    /// Make the current direction the front, treating the current head
+    /// orientation as level.
     pub fn recenter(&mut self) {
-        self.reference = Some(self.current);
+        let e = self.tracker();
+        let heading = heading_of(e.rotate([0.0, 1.0, 0.0]), e.rotate([0.0, 0.0, 1.0]));
+        let level = Quat::from_rotation_vector([0.0, 0.0, heading]);
+        self.calibration = e.conj().mul(level).normalize();
+        self.front_heading = Some(heading);
     }
 
     pub fn reset(&mut self) {
-        self.reference = None;
+        self.front_heading = None;
+        self.calibration = Quat::IDENTITY;
         self.current = Quat::IDENTITY;
     }
 
-    /// Slowly pull the reference towards the current orientation.
+    /// Current heading of the (calibrated) head, in radians.
+    fn current_heading(&self) -> f32 {
+        let h = self.head();
+        heading_of(h.rotate([0.0, 1.0, 0.0]), h.rotate([0.0, 0.0, 1.0]))
+    }
+
+    /// Slowly turn the room's front towards the current heading.
     pub fn drift_towards_current(&mut self, t: f32) {
-        if let Some(r) = self.reference {
-            self.reference = Some(r.slerp(self.current, t));
+        if let Some(front) = self.front_heading {
+            let delta = wrap_angle(self.current_heading() - front);
+            self.front_heading = Some(wrap_angle(front + delta * t));
         }
     }
 
     /// Rotation that maps a direction fixed in the room (expressed in the
-    /// head frame at recentring) into the current head frame.
+    /// level head frame at recentring) into the current head frame.
+    /// Identity until the first recentring.
     pub fn room_to_head(&self) -> Quat {
-        let r = self.reference.unwrap_or(Quat::IDENTITY);
-        let q = self.current;
-        if self.invert {
-            q.mul(r.conj())
-        } else {
-            q.conj().mul(r)
-        }
+        let Some(front) = self.front_heading else {
+            return Quat::IDENTITY;
+        };
+        let room = Quat::from_rotation_vector([0.0, 0.0, front]);
+        self.head().conj().mul(room).normalize()
     }
 
     /// Where a source straight ahead in the room now appears, as
@@ -188,6 +212,13 @@ impl HeadPose {
         let el = d[2].clamp(-1.0, 1.0).asin().to_degrees();
         (az, el)
     }
+}
+
+/// Rotation speed between two orientations, in rad/s.
+pub fn angular_speed(a: Quat, b: Quat, dt: f32) -> f32 {
+    let d = a.conj().mul(b);
+    let angle = 2.0 * d.w.abs().clamp(0.0, 1.0).acos();
+    if dt > 0.0 { angle / dt } else { 0.0 }
 }
 
 #[cfg(test)]
@@ -212,6 +243,7 @@ mod tests {
     fn turning_left_moves_front_to_the_right() {
         let mut pose = HeadPose::new(false);
         pose.update(Quat::IDENTITY);
+        pose.recenter();
         // Head turns 90 degrees left = +90 degrees about the up axis (+Z),
         // with the quaternion mapping head-frame vectors into the room.
         pose.update(Quat::from_rotation_vector([
@@ -222,6 +254,45 @@ mod tests {
         let (az, el) = pose.front_source_angles();
         assert!((az + 90.0).abs() < 1e-3, "az = {az}");
         assert!(el.abs() < 1e-3);
+    }
+
+    #[test]
+    fn tilted_mount_is_calibrated_out() {
+        use std::f32::consts::FRAC_PI_2;
+        // Earbud frame pitched 41 degrees relative to the head, head facing
+        // an arbitrary heading of 20 degrees.
+        let tilt = Quat::from_rotation_vector([41f32.to_radians(), 0.0, 0.0]);
+        let heading = Quat::from_rotation_vector([0.0, 0.0, 20f32.to_radians()]);
+        let mut pose = HeadPose::new(false);
+        pose.update(heading.mul(tilt));
+        pose.recenter();
+        let (az, el) = pose.front_source_angles();
+        assert!(az.abs() < 1e-3 && el.abs() < 1e-3, "az={az} el={el}");
+        // Turn the head 90 degrees left about the vertical axis.
+        let yaw = Quat::from_rotation_vector([0.0, 0.0, FRAC_PI_2]);
+        pose.update(yaw.mul(heading).mul(tilt));
+        let (az, el) = pose.front_source_angles();
+        assert!((az + 90.0).abs() < 1e-2, "az={az}");
+        assert!(el.abs() < 1e-2, "el={el}");
+        // Look up 30 degrees (about the head's ear axis).
+        let up = Quat::from_rotation_vector([30f32.to_radians(), 0.0, 0.0]);
+        pose.update(heading.mul(up).mul(tilt));
+        let (az, el) = pose.front_source_angles();
+        assert!(az.abs() < 1e-2, "az={az}");
+        assert!((el + 30.0).abs() < 1e-2, "el={el}");
+    }
+
+    #[test]
+    fn follow_turns_front_towards_head() {
+        let mut pose = HeadPose::new(false);
+        pose.update(Quat::IDENTITY);
+        pose.recenter();
+        pose.update(Quat::from_rotation_vector([0.0, 0.0, 1.0]));
+        for _ in 0..200 {
+            pose.drift_towards_current(0.05);
+        }
+        let (az, _) = pose.front_source_angles();
+        assert!(az.abs() < 0.1, "az={az}");
     }
 
     #[test]

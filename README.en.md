@@ -34,6 +34,8 @@ apps ──► "Spatial Audio (Head Tracking)" virtual 7.1 sink
 - The default HRTF is libmysofa's MIT KEMAR (`default.sofa`); use `--sofa` for any SOFA file.
 - Both streams share a node group and link group (like `pw-loopback`), so no feedback loops.
 - Processing runs at 48 kHz; PipeWire converts other rates.
+- After the sensor is enabled, its attitude takes a while to converge to gravity (about 15 s on the WF-1000XM5). Sound stays in front meanwhile; once the readings settle, the current direction becomes the front automatically.
+- Recentring assumes you look straight ahead with a level head: only the heading is kept, and the tilt of the earbud in your ear is stored as a fixed offset. Run `recenter` while looking ahead whenever the front feels off.
 
 ## Install
 
