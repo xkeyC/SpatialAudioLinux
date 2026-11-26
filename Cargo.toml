@@ -1,0 +1,19 @@
+[package]
+name = "spatial-audio-linux"
+version = "0.1.0"
+edition = "2024"
+description = "Head-tracked spatial audio for PipeWire using headphones that speak the Android Head Tracker HID protocol"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/xkeyC/SpatialAudioLinux"
+
+[dependencies]
+anyhow = "1.0.105"
+clap = { version = "4.6.10", features = ["derive", "env"] }
+libc = "0.2.191"
+pipewire = { version = "0.10.1", features = ["v0_3_65"] }
+sofar = "0.4.0"
+ringbuf = "0.5.3"
+zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
+
+[profile.release]
+lto = "thin"
