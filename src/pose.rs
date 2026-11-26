@@ -191,6 +191,17 @@ impl HeadPose {
         }
     }
 
+    /// Make the current heading the front immediately, keeping the mount
+    /// calibration (after the tracker reset its reference frame, the old
+    /// heading means nothing in the new frame).
+    pub fn rebase_heading(&mut self) {
+        if self.front_heading.is_some() {
+            let heading = self.current_heading();
+            self.target_heading = heading;
+            self.front_heading = Some(heading);
+        }
+    }
+
     /// Move the rendered front towards its target by at most
     /// `max_rate * dt` radians.
     pub fn advance(&mut self, dt: f32, max_rate: f32) {

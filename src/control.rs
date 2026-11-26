@@ -59,21 +59,34 @@ fn handle(stream: UnixStream, shared: &Shared) -> Result<()> {
         "status" => {
             let st = shared.status.lock().unwrap().clone();
             let tracking = shared.tracking.load(Ordering::Relaxed);
+            let extra = format!(
+                "\nauto-recenter: {}\nequaliser: {}",
+                if shared.auto_recenter.load(Ordering::Relaxed) {
+                    "on"
+                } else {
+                    "off"
+                },
+                crate::eq::EqMode::from_index(shared.eq.load(Ordering::Relaxed)).name()
+            );
             match st.device {
-                Some(dev) => format!(
-                    "tracker: {dev} ({}{})\nprotocol: {}\nhead tracking: {}\nsamples: {}\nfront source: azimuth {:.1}°, elevation {:.1}°",
-                    st.devnode.unwrap_or_default(),
-                    st.address.map(|a| format!(", {a}")).unwrap_or_default(),
-                    st.protocol.unwrap_or_default(),
-                    if tracking { "on" } else { "off" },
-                    st.samples,
-                    st.front_azimuth,
-                    st.front_elevation,
-                ),
-                None => format!(
-                    "tracker: none\nhead tracking: {}",
-                    if tracking { "on" } else { "off" }
-                ),
+                Some(dev) => {
+                    format!(
+                        "tracker: {dev} ({}{})\nprotocol: {}\nhead tracking: {}\nsamples: {}\nfront source: azimuth {:.1}°, elevation {:.1}°",
+                        st.devnode.unwrap_or_default(),
+                        st.address.map(|a| format!(", {a}")).unwrap_or_default(),
+                        st.protocol.unwrap_or_default(),
+                        if tracking { "on" } else { "off" },
+                        st.samples,
+                        st.front_azimuth,
+                        st.front_elevation,
+                    ) + &extra
+                }
+                None => {
+                    format!(
+                        "tracker: none\nhead tracking: {}",
+                        if tracking { "on" } else { "off" }
+                    ) + &extra
+                }
             }
         }
         other => format!("unknown command {other:?}"),

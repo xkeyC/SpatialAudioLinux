@@ -1,10 +1,12 @@
 mod audio;
 mod bluez;
 mod control;
+mod eq;
 mod hid;
 mod pose;
 mod render;
 mod tracking;
+mod tray;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -84,11 +86,14 @@ struct RunArgs {
     #[arg(long, default_value_t = 30.0)]
     front_angle: f32,
     /// Output gain in dB.
-    #[arg(long, default_value_t = -3.0, allow_hyphen_values = true)]
+    #[arg(long, default_value_t = -6.0, allow_hyphen_values = true)]
     gain_db: f32,
     /// LFE gain in dB (relative to the other channels).
     #[arg(long, default_value_t = -6.0, allow_hyphen_values = true)]
     lfe_gain_db: f32,
+    /// Headphone equalisation of the HRTFs.
+    #[arg(long, value_enum, default_value_t = eq::EqMode::Front)]
+    eq: eq::EqMode,
     /// Virtual speaker distance in metres (HRTF lookup).
     #[arg(long, default_value_t = 1.0)]
     distance: f32,
@@ -96,6 +101,9 @@ struct RunArgs {
     /// output of the headphones the tracker belongs to.
     #[arg(long)]
     target: Option<String>,
+    /// Do not show a system tray icon.
+    #[arg(long)]
+    no_tray: bool,
     /// node.name of the virtual sink.
     #[arg(long, default_value = "spatial_audio_sink")]
     sink_name: String,
@@ -121,7 +129,6 @@ fn tracking_options(args: &TrackerArgs, verbose: bool) -> tracking::TrackingOpti
         device: args.device.clone(),
         interval_ms: args.interval_ms,
         invert: args.invert,
-        auto_recenter: !args.no_auto_recenter,
         connect_hid: !args.no_connect_hid,
         verbose,
     }
@@ -132,6 +139,13 @@ fn run(args: RunArgs) -> Result<()> {
         Some(p) => p,
         None => bail!("no SOFA file found; pass --sofa (e.g. libmysofa's default.sofa)"),
     };
+    let shared = tracking::Shared::new();
+    shared
+        .auto_recenter
+        .store(!args.tracker.no_auto_recenter, Ordering::Relaxed);
+    shared.eq.store(args.eq.index(), Ordering::Relaxed);
+    control::serve(shared.clone())?;
+
     let speakers = render::layout_7_1(args.front_angle);
     let (scene, engine) = render::build(render::RenderConfig {
         sofa_path: &sofa,
@@ -141,11 +155,12 @@ fn run(args: RunArgs) -> Result<()> {
         gain: 10f32.powf(args.gain_db / 20.0),
         lfe_gain: 10f32.powf(args.lfe_gain_db / 20.0),
         distance: args.distance,
+        eq: shared.eq.clone(),
     })?;
     eprintln!("HRTF: {}", sofa.display());
-
-    let shared = tracking::Shared::new();
-    control::serve(shared.clone())?;
+    if !args.no_tray {
+        tray::spawn(shared.clone());
+    }
     let tracker = std::thread::Builder::new()
         .name("head-tracker".into())
         .spawn({

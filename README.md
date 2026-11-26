@@ -34,6 +34,7 @@
 
 - 虚拟音箱按 ITU 7.1 摆放：前左右 ±30°、中置 0°、侧 ±90°、后 ±150°。LFE 不过 HRTF，直接混到两耳。立体声应用的声音来自前方 ±30° 的两只音箱。
 - HRTF 默认用 libmysofa 自带的 MIT KEMAR（`default.sofa`），可以用 `--sofa` 换成任意 SOFA 文件。
+- 原始 HRTF 测量数据带着测量链路的染色：MIT KEMAR 是在假人耳道口测的，所有方向都有 2–4 kHz 约 +15 dB 的耳道共振，低频又被测量音箱削掉 20–35 dB，直接用听起来像电话。所以输出端加了一个最小相位均衡（4096 抽头）：`front` 按前方 ±30° 两只音箱的平均响应均衡，立体声内容的音色最接近原曲；`diffuse` 是标准的扩散场均衡（所有方向的平均）；`none` 不均衡。
 - 两条流同属一个 node.group 和 node.link-group（和 `pw-loopback` 一样），不会形成回环。
 - 内部以 48 kHz 处理，其他采样率由 PipeWire 自动转换。
 - 耳机打开传感器后，姿态要十几秒才收敛到重力方向（WF-1000XM5 约 15 秒）。这段时间声音保持在正前方；读数稳定后，程序自动把当前方向设为正前方。
@@ -85,6 +86,8 @@ spatial-audio-linux status
 
 启动后，在系统的声音设置里把默认输出设为「Spatial Audio (Head Tracking)」。
 
+系统托盘里有一个耳机图标：左键单击重新校准正前方，中键单击开关头部追踪；右键菜单里可以看状态（设备、正前方声音的方位），开关头追和自动回中，切换均衡方式，或退出。不需要托盘时加 `--no-tray`。
+
 建议给 `spatial-audio-linux recenter` 绑一个全局快捷键（KDE：系统设置 → 键盘 → 快捷键 → 添加命令）。
 
 常用参数（`spatial-audio-linux run --help` 查看全部）：
@@ -92,6 +95,7 @@ spatial-audio-linux status
 | 参数 | 说明 |
 | --- | --- |
 | `--sofa <文件>` | HRTF 数据（SOFA）。也可以用环境变量 `SPATIAL_AUDIO_SOFA` 指定 |
+| `--eq front\|diffuse\|none` | HRTF 的耳机均衡，默认 `front`（见下文），托盘里也能切换 |
 | `--no-auto-recenter` | 关闭自动回中（见下文） |
 | `--front-angle <度>` | 前置左右音箱的角度，默认 30 |
 | `--gain-db`、`--lfe-gain-db` | 输出增益和 LFE 增益 |

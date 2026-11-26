@@ -1,7 +1,7 @@
 //! Head tracking thread: finds a tracker, reads it and drives the scene.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -74,11 +74,16 @@ pub struct Status {
     pub front_azimuth: f32,
     pub front_elevation: f32,
     pub samples: u64,
+    /// The front has been chosen (the tracker's attitude has settled).
+    pub centered: bool,
 }
 
 pub struct Shared {
     pub recenter: AtomicBool,
     pub tracking: AtomicBool,
+    pub auto_recenter: AtomicBool,
+    /// Equaliser in use ([`crate::eq::EqMode::index`]).
+    pub eq: Arc<AtomicU8>,
     pub quit: AtomicBool,
     pub status: Mutex<Status>,
 }
@@ -88,6 +93,8 @@ impl Shared {
         Arc::new(Shared {
             recenter: AtomicBool::new(false),
             tracking: AtomicBool::new(true),
+            auto_recenter: AtomicBool::new(true),
+            eq: Arc::new(AtomicU8::new(0)),
             quit: AtomicBool::new(false),
             status: Mutex::new(Status::default()),
         })
@@ -100,8 +107,6 @@ pub struct TrackingOptions {
     pub device: Option<String>,
     pub interval_ms: u32,
     pub invert: bool,
-    /// Recentre (heading only) after the head has been still for a while.
-    pub auto_recenter: bool,
     pub connect_hid: bool,
     /// Print the pose for every sample.
     pub verbose: bool,
@@ -253,7 +258,7 @@ fn track(
         };
     }
 
-    let mut enabled_at = Instant::now();
+    let enabled_at = Instant::now();
     let mut last_sample = Instant::now();
     let mut last_time = Instant::now();
     // Recent orientations, to measure rotation speed over a window: the
@@ -322,16 +327,17 @@ fn track(
         }
         if sample.discontinuity.is_some() && sample.discontinuity != last_discontinuity {
             if last_discontinuity.is_some() && pose.is_centered() {
-                // New reference frame: wait for it to settle, then recentre.
-                eprintln!("tracker reference frame reset");
-                pose.reset();
-                pose.update(q);
-                enabled_at = now;
+                // New reference frame (Android recentres here too).
+                eprintln!("tracker reference frame reset, front set to the current heading");
+                pose.rebase_heading();
                 stillness.clear();
             }
             last_discontinuity = sample.discontinuity;
         }
-        if shared.recenter.swap(false, Ordering::Relaxed) {
+        // Before the attitude has settled the automatic recentring will
+        // pick the front anyway; recentring now would calibrate against an
+        // unconverged attitude.
+        if shared.recenter.swap(false, Ordering::Relaxed) && pose.is_centered() {
             pose.recenter();
             stillness.clear();
             eprintln!("recentred");
@@ -341,7 +347,7 @@ fn track(
         // becomes the front (heading only; the mount calibration is kept).
         if pose.is_centered() {
             stillness.push(now, pose.head());
-            if opts.auto_recenter && stillness.is_still() {
+            if shared.auto_recenter.load(Ordering::Relaxed) && stillness.is_still() {
                 pose.recenter_heading();
                 stillness.clear();
             }
@@ -364,6 +370,7 @@ fn track(
             st.front_azimuth = az;
             st.front_elevation = el;
             st.samples = samples;
+            st.centered = pose.is_centered();
         }
         if opts.verbose {
             println!(

@@ -32,6 +32,7 @@ apps ──► "Spatial Audio (Head Tracking)" virtual 7.1 sink
 
 - Speakers follow ITU 7.1: front ±30°, centre 0°, sides ±90°, rears ±150°. LFE bypasses the HRTF. Stereo content plays from the front pair.
 - The default HRTF is libmysofa's MIT KEMAR (`default.sofa`); use `--sofa` for any SOFA file.
+- Raw HRTF measurements carry the colouration of the measurement chain: MIT KEMAR is measured at the ear canal of a dummy head, so every direction shares a +15 dB ear-canal resonance at 2-4 kHz and the measurement loudspeaker removes 20-35 dB of bass; played directly it sounds like a telephone. A minimum-phase equaliser (4096 taps) on the output fixes this: `front` equalises to the front ±30° speakers so stereo content keeps its timbre, `diffuse` is standard diffuse-field equalisation, `none` disables it.
 - Both streams share a node group and link group (like `pw-loopback`), so no feedback loops.
 - Processing runs at 48 kHz; PipeWire converts other rates.
 - After the sensor is enabled, its attitude takes a while to converge to gravity (about 15 s on the WF-1000XM5). Sound stays in front meanwhile; once the readings settle, the current direction becomes the front automatically.
@@ -81,13 +82,14 @@ spatial-audio-linux toggle     # head tracking on/off (off: speakers follow the 
 spatial-audio-linux status
 ```
 
-After starting, select "Spatial Audio (Head Tracking)" as the default output in your sound settings. Binding `spatial-audio-linux recenter` to a global shortcut is recommended.
+After starting, select "Spatial Audio (Head Tracking)" as the default output in your sound settings. A headphones icon appears in the system tray: left click recenters, middle click toggles head tracking, and the menu shows the status and switches head tracking, auto-recentring and the equaliser. Use `--no-tray` to hide it. Binding `spatial-audio-linux recenter` to a global shortcut is recommended.
 
 Common options (see `spatial-audio-linux run --help`):
 
 | Option | Meaning |
 | --- | --- |
 | `--sofa <file>` | HRTF data (SOFA); also `SPATIAL_AUDIO_SOFA` |
+| `--eq front\|diffuse\|none` | Headphone equalisation of the HRTFs, default `front` (see above); also in the tray |
 | `--no-auto-recenter` | Disable auto-recentring (see above) |
 | `--front-angle <deg>` | Angle of the front left/right speakers, default 30 |
 | `--gain-db`, `--lfe-gain-db` | Output and LFE gain |

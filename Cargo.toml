@@ -12,8 +12,10 @@ clap = { version = "4.6.10", features = ["derive", "env"] }
 libc = "0.2.191"
 pipewire = { version = "0.10.1", features = ["v0_3_65"] }
 sofar = "0.4.0"
+realfft = "3.5.1"
 ringbuf = "0.5.3"
 zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
+ksni = { version = "0.3.8", default-features = false, features = ["blocking", "async-io"] }
 
 [profile.release]
 lto = "thin"
