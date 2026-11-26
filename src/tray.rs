@@ -12,11 +12,43 @@ use ksni::{MenuItem, ToolTip};
 use crate::eq::EqMode;
 use crate::tracking::Shared;
 
-fn chinese() -> bool {
-    ["LC_ALL", "LC_MESSAGES", "LANG"]
-        .iter()
-        .find_map(|k| std::env::var(k).ok().filter(|v| !v.is_empty()))
-        .is_some_and(|v| v.starts_with("zh"))
+/// UI language preference: the KDE display language (System Settings ->
+/// Region & Language, stored in plasma-localerc) if set, otherwise the usual
+/// LANGUAGE / LC_ALL / LC_MESSAGES / LANG precedence. Only the first entry of
+/// a colon-separated list counts.
+fn preferred_language() -> Option<String> {
+    let kde = std::env::var_os("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join(".config")))
+        .map(|dir| dir.join("plasma-localerc"))
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|ini| {
+            let mut in_translations = false;
+            ini.lines().find_map(|line| {
+                let line = line.trim();
+                if line.starts_with('[') {
+                    in_translations = line == "[Translations]";
+                    return None;
+                }
+                let value = line.strip_prefix("LANGUAGE=")?;
+                in_translations.then(|| value.to_string())
+            })
+        });
+    let env = || {
+        ["LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"]
+            .iter()
+            .find_map(|k| std::env::var(k).ok().filter(|v| !v.is_empty()))
+    };
+    kde.filter(|v| !v.is_empty())
+        .or_else(env)
+        .and_then(|v| v.split(':').next().map(str::to_owned))
+}
+
+fn detect_text() -> &'static Text {
+    match preferred_language() {
+        Some(lang) if lang.starts_with("zh") => &ZH,
+        _ => &EN,
+    }
 }
 
 struct Text {
@@ -48,7 +80,7 @@ const ZH: Text = Text {
     eq_diffuse: "扩散场",
     eq_none: "不均衡（原始 HRTF）",
     quit: "退出",
-    hint: "左键：重新校准　中键：开关头追",
+    hint: "中键：开关头部追踪",
 };
 
 const EN: Text = Text {
@@ -64,7 +96,7 @@ const EN: Text = Text {
     eq_diffuse: "Diffuse field",
     eq_none: "None (raw HRTF)",
     quit: "Quit",
-    hint: "Left click: recenter · Middle click: toggle tracking",
+    hint: "Middle click: toggle head tracking",
 };
 
 struct SpatialTray {
@@ -87,6 +119,9 @@ impl SpatialTray {
 }
 
 impl ksni::Tray for SpatialTray {
+    // Left click opens the menu as well (right click always does).
+    const MENU_ON_ACTIVATE: bool = true;
+
     fn id(&self) -> String {
         "spatial-audio-linux".into()
     }
@@ -115,10 +150,6 @@ impl ksni::Tray for SpatialTray {
             description: format!("{}\n{}", self.status_line(), self.text.hint),
             ..Default::default()
         }
-    }
-
-    fn activate(&mut self, _x: i32, _y: i32) {
-        self.shared.recenter.store(true, Ordering::Relaxed);
     }
 
     fn secondary_activate(&mut self, _x: i32, _y: i32) {
@@ -203,7 +234,7 @@ impl ksni::Tray for SpatialTray {
 pub fn spawn(shared: Arc<Shared>) {
     let tray = SpatialTray {
         shared: shared.clone(),
-        text: if chinese() { &ZH } else { &EN },
+        text: detect_text(),
     };
     let handle = match tray.spawn() {
         Ok(h) => h,
@@ -216,8 +247,10 @@ pub fn spawn(shared: Arc<Shared>) {
         .name("tray".into())
         .spawn(move || {
             while !shared.quit.load(Ordering::Relaxed) && !handle.is_closed() {
-                // Re-evaluate tooltip, status and menu.
-                handle.update(|_| {});
+                // Re-evaluate tooltip, status and menu, and follow changes
+                // of the desktop language.
+                let text = detect_text();
+                handle.update(|tray| tray.text = text);
                 std::thread::sleep(Duration::from_secs(1));
             }
             let _ = handle.shutdown();
